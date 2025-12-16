@@ -1,0 +1,129 @@
+name: Destroy EKS Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_name:
+        description: 'Nombre del cluster EKS a eliminar'
+        required: true
+        default: 'aw-kevin-dev-us-east-2-main'
+      region:
+        description: 'Región de AWS'
+        required: true
+        default: 'us-east-2'
+      confirm_destroy:
+        description: 'Escribe DESTROY para confirmar la eliminación'
+        required: true
+
+jobs:
+  destroy:
+    name: Destroy EKS Cluster
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC
+      contents: read    # checkout
+
+    env:
+      AWS_REGION: ${{ inputs.region }}
+      CLUSTER_NAME: ${{ inputs.cluster_name }}
+
+    steps:
+      - name: Validate destroy confirmation
+        run: |
+          if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "ERROR: Debes escribir 'DESTROY' para confirmar la eliminación del cluster"
+            echo "Valor recibido: ${{ inputs.confirm_destroy }}"
+            exit 1
+          fi
+          echo "Confirmación recibida. Procediendo con la eliminación..."
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-eks-destroy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS credentials
+        run: |
+          echo "Verificando credenciales de AWS..."
+          aws sts get-caller-identity
+          echo "Región configurada: ${{ env.AWS_REGION }}"
+
+      - name: Install eksctl
+        run: |
+          echo "Instalando eksctl (última versión)..."
+          ARCH=amd64
+          PLATFORM=$(uname -s)_$ARCH
+          curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_$PLATFORM.tar.gz"
+          tar -xzf eksctl_$PLATFORM.tar.gz -C /tmp
+          sudo mv /tmp/eksctl /usr/local/bin
+          rm eksctl_$PLATFORM.tar.gz
+          echo "Versión de eksctl instalada:"
+          eksctl version
+
+      - name: Check cluster exists
+        id: check_cluster
+        run: |
+          echo "Verificando si el cluster existe..."
+          if eksctl get cluster --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "cluster_exists=true" >> $GITHUB_OUTPUT
+            echo "Cluster encontrado: ${{ env.CLUSTER_NAME }}"
+          else
+            echo "cluster_exists=false" >> $GITHUB_OUTPUT
+            echo "ADVERTENCIA: El cluster ${{ env.CLUSTER_NAME }} no existe o no es accesible"
+          fi
+
+      - name: Destroy EKS cluster
+        if: steps.check_cluster.outputs.cluster_exists == 'true'
+        run: |
+          echo "=========================================="
+          echo "INICIANDO ELIMINACIÓN DEL CLUSTER"
+          echo "=========================================="
+          echo "Cluster: ${{ env.CLUSTER_NAME }}"
+          echo "Región: ${{ env.AWS_REGION }}"
+          echo ""
+          echo "Este proceso puede tomar 10-20 minutos..."
+          echo ""
+          
+          # Nota: eksctl 0.218.0+ tiene termination protection habilitado por defecto
+          # Si falla por esto, primero deshabilitar la protección
+          eksctl delete cluster \
+            --name ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --disable-nodegroup-eviction \
+            --force \
+            --verbose 3
+
+      - name: Verify cluster deletion
+        run: |
+          echo "Verificando eliminación del cluster..."
+          sleep 10
+          
+          if eksctl get cluster --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "ADVERTENCIA: El cluster aún podría estar eliminándose..."
+            echo "Verifica manualmente en la consola de AWS"
+          else
+            echo "Cluster ${{ env.CLUSTER_NAME }} eliminado exitosamente"
+          fi
+
+      - name: Display completion message
+        run: |
+          echo "=========================================="
+          echo "PROCESO DE ELIMINACIÓN COMPLETADO"
+          echo "=========================================="
+          echo ""
+          echo "El cluster ${{ env.CLUSTER_NAME }} ha sido eliminado."
+          echo ""
+          echo "Verifica que no queden recursos huérfanos:"
+          echo "- NAT Gateways"
+          echo "- Elastic IPs"
+          echo "- Load Balancers"
+          echo "- Security Groups"
+          echo ""
+          echo "Puedes verificar con:"
+          echo "eksctl get cluster --region ${{ env.AWS_REGION }}"
+          echo "=========================================="

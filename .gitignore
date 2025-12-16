@@ -1,0 +1,79 @@
+# Archivos de dependencias
+node_modules/
+vendor/
+
+# Archivos de build
+dist/
+build/
+*.egg-info/
+__pycache__/
+
+# Archivos de entorno
+.env
+.env.local
+.env.*.local
+*.env
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!terraform.tfvars.example
+crash.log
+
+# Archivos de AWS
+.aws/
+
+# Archivos de Kubernetes
+*.kubeconfig
+kubeconfig
+.kube/
+
+# Archivos de logs
+*.log
+logs/
+
+# Archivos temporales
+tmp/
+temp/
+*.tmp
+
+# Archivos de secretos
+secrets/
+*.pem
+*.key
+*.crt
+!*.example.pem
+!*.example.key
+
+# Archivos de coverage
+coverage/
+.coverage
+htmlcov/
+
+# Archivos de cache
+.cache/
+*.cache
+
+# Archivos zip/tar
+*.zip
+*.tar.gz
+*.tgz
+
+# Documentación generada (excepto docs/)
+site/
+
+# Archivos específicos del proyecto
+trust-policy.json

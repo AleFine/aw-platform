@@ -1,0 +1,43 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: aw-kevin-dev-us-east-2-main
+  region: us-east-2
+  version: "1.32"
+
+availabilityZones:
+  - us-east-2a
+
+iam:
+  withOIDC: true
+
+# Managed Node Groups con Amazon Linux 2023 
+managedNodeGroups:
+  - name: ng-kevin-small
+    instanceType: t3.small
+    desiredCapacity: 2
+    minSize: 1
+    maxSize: 3
+    availabilityZones:
+      - us-east-2a
+    volumeSize: 20
+    volumeType: gp3
+    labels:
+      role: worker
+      environment: dev
+    tags:
+      Project: aw-platform
+      Owner: kevin
+      Environment: dev
+    # SSH deshabilitado por seguridad
+    ssh:
+      allow: false
+
+# Logging del cluster 
+cloudWatch:
+  clusterLogging:
+    enableTypes:
+      - api
+      - audit
+      - authenticator

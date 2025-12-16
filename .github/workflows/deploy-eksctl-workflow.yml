@@ -1,0 +1,109 @@
+name: Deploy EKS Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_name:
+        description: 'Nombre del cluster EKS'
+        required: false
+        default: 'aw-kevin-dev-us-east-2-main'
+      region:
+        description: 'Región de AWS'
+        required: false
+        default: 'us-east-2'
+
+jobs:
+  deploy:
+    name: Create EKS Cluster
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC
+      contents: read    # checkout
+
+    env:
+      AWS_REGION: ${{ inputs.region || 'us-east-2' }}
+      CLUSTER_NAME: ${{ inputs.cluster_name || 'aw-kevin-dev-us-east-2-main' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-eks-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS credentials
+        run: |
+          echo "Verificando credenciales de AWS..."
+          aws sts get-caller-identity
+          echo "Región configurada: ${{ env.AWS_REGION }}"
+
+      - name: Install eksctl
+        run: |
+          echo "Instalando eksctl (última versión)..."
+          ARCH=amd64
+          PLATFORM=$(uname -s)_$ARCH
+          curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_$PLATFORM.tar.gz"
+          tar -xzf eksctl_$PLATFORM.tar.gz -C /tmp
+          sudo mv /tmp/eksctl /usr/local/bin
+          rm eksctl_$PLATFORM.tar.gz
+          echo "Versión de eksctl instalada:"
+          eksctl version
+
+      - name: Verify cluster config file
+        run: |
+          echo "Verificando archivo de configuración del cluster..."
+          if [ -f "kevin/infra/templates/eks-cluster.yaml" ]; then
+            echo "Archivo de configuración encontrado:"
+            cat kevin/infra/templates/eks-cluster.yaml
+          else
+            echo "ERROR: Archivo de configuración no encontrado"
+            exit 1
+          fi
+
+      - name: Create EKS cluster
+        run: |
+          echo "Creando cluster EKS: ${{ env.CLUSTER_NAME }}"
+          echo "Región: ${{ env.AWS_REGION }}"
+          echo "Este proceso puede tomar 15-25 minutos..."
+          
+          eksctl create cluster \
+            --config-file kevin/infra/templates/eks-cluster.yaml \
+            --verbose 3
+
+      - name: Verify cluster creation
+        run: |
+          echo "Verificando creación del cluster..."
+          eksctl get cluster --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+          
+          echo ""
+          echo "Configurando kubeconfig..."
+          aws eks update-kubeconfig \
+            --name ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+          
+          echo ""
+          echo "Verificando nodos del cluster:"
+          kubectl get nodes -o wide
+          
+          echo ""
+          echo "Información del cluster:"
+          kubectl cluster-info
+
+      - name: Display cluster information
+        run: |
+          echo "=========================================="
+          echo "CLUSTER EKS CREADO EXITOSAMENTE"
+          echo "=========================================="
+          echo "Nombre del cluster: ${{ env.CLUSTER_NAME }}"
+          echo "Región: ${{ env.AWS_REGION }}"
+          echo ""
+          echo "Para conectarte localmente, ejecuta:"
+          echo "aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}"
+          echo ""
+          echo "Luego verifica con:"
+          echo "kubectl get nodes"
+          echo "=========================================="
