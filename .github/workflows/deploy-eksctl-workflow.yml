@@ -56,9 +56,9 @@ jobs:
       - name: Verify cluster config file
         run: |
           echo "Verificando archivo de configuración del cluster..."
-          if [ -f "kevin/infra/templates/eks-cluster.yaml" ]; then
+          if [ -f "infra/templates/eks-cluster.yaml" ]; then
             echo "Archivo de configuración encontrado:"
-            cat kevin/infra/templates/eks-cluster.yaml
+            cat infra/templates/eks-cluster.yaml
           else
             echo "ERROR: Archivo de configuración no encontrado"
             exit 1
@@ -71,7 +71,7 @@ jobs:
           echo "Este proceso puede tomar 15-25 minutos..."
           
           eksctl create cluster \
-            --config-file kevin/infra/templates/eks-cluster.yaml \
+            --config-file infra/templates/eks-cluster.yaml \
             --verbose 3
 
       - name: Verify cluster creation
