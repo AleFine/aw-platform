@@ -124,6 +124,6 @@ jobs:
           echo "- Load Balancers"
           echo "- Security Groups"
           echo ""
-          echo "Puedes verificar con:"
+          echo "Verificar con:"
           echo "eksctl get cluster --region ${{ env.AWS_REGION }}"
           echo "=========================================="

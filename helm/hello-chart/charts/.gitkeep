@@ -1,0 +1,2 @@
+# This directory is reserved for chart dependencies
+# Add dependencies to Chart.yaml and run `helm dependency update`

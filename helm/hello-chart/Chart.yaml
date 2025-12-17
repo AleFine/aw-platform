@@ -1,0 +1,14 @@
+apiVersion: v2
+name: hello-chart
+description: A Helm chart for deploying Hello World application to AWS EKS
+type: application
+version: 0.1.0
+appVersion: "1.28.0"
+maintainers:
+  - name: kevin
+    email: kevin@example.com
+keywords:
+  - nginx
+  - hello-world
+  - eks
+home: https://github.com/aw-platform/kevin

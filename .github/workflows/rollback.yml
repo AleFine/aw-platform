@@ -1,0 +1,81 @@
+# rollback a Helm release 
+name: Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Revision number to rollback to (leave empty for previous)'
+        required: false
+        type: string
+      release_name:
+        description: 'Helm release name'
+        required: false
+        default: 'hello-world'
+        type: string
+
+env:
+  AWS_REGION: us-east-2
+  EKS_CLUSTER_NAME: aw-kevin-dev-us-east-2-main
+
+jobs:
+  rollback:
+    name: Rollback to Previous Version
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-rollback
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.16.4'
+
+      - name: Update kubeconfig
+        run: |
+          echo " Connecting to EKS cluster..."
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Show Deployment History
+        run: |
+          echo " Current deployment history:"
+          helm history ${{ inputs.release_name || 'hello-world' }} --max 10 || echo "No history found"
+
+      - name: Perform Rollback
+        run: |
+          RELEASE_NAME="${{ inputs.release_name || 'hello-world' }}"
+          REVISION="${{ inputs.revision }}"
+          
+          if [ -n "$REVISION" ]; then
+            echo "Rolling back to revision $REVISION..."
+            helm rollback $RELEASE_NAME $REVISION
+          else
+            echo "Rolling back to previous version..."
+            helm rollback $RELEASE_NAME
+          fi
+
+      - name: Verify Rollback
+        run: |
+          echo " Verifying rollback..."
+          RELEASE_NAME="${{ inputs.release_name || 'hello-world' }}"
+          
+          kubectl rollout status deployment/${RELEASE_NAME}-hello-chart --timeout=300s
+          
+          echo ""
+          echo "Rollback completed successfully!"
+          echo ""
+          echo "Current status:"
+          kubectl get pods -l app.kubernetes.io/name=hello-chart
+          echo ""
+          echo "Updated history:"
+          helm history $RELEASE_NAME --max 5

@@ -1,0 +1,253 @@
+
+name: Deploy to EKS
+
+on:
+  push:
+    branches:
+      - main
+      - day2
+    paths:
+      - 'app/**'
+      - 'helm/**'
+      - '.github/workflows/deploy-to-eks.yml'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+# Environment variables
+env:
+  AWS_REGION: us-east-2
+  EKS_CLUSTER_NAME: aw-kevin-dev-us-east-2-main
+  ECR_REPOSITORY: hello-world-app
+  HELM_CHART_PATH: ./helm/hello-chart
+  HELM_RELEASE_NAME: hello-world
+
+jobs:
+  # Job 1: Build and Push Docker Image
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   #  OIDC
+      contents: read    # checkout
+    
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-ecr-push
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag, and Push Docker Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        working-directory: ./app
+        run: |
+          echo "Building Docker image..."
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          
+          echo "Pushing images to ECR..."
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          echo "Image pushed successfully!"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  # Job 2: Deploy to EKS using Helm
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-eks-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.16.4'
+
+      - name: Update kubeconfig
+        run: |
+          echo "Updating kubeconfig for EKS cluster..."
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+          
+          echo "Kubeconfig updated successfully!"
+          kubectl cluster-info
+
+      - name: Lint Helm Chart
+        run: |
+          echo " Linting Helm chart..."
+          helm lint ${{ env.HELM_CHART_PATH }}
+
+      - name: Deploy to EKS using Helm
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          echo "Deploying to EKS..."
+          echo "Image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          
+          helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
+            --set image.repository=$ECR_REGISTRY/$ECR_REPOSITORY \
+            --set image.tag=$IMAGE_TAG \
+            --wait \
+            --timeout=5m \
+            --atomic
+          
+          echo "Deployment completed!"
+
+      - name: Verify Deployment
+        run: |
+          echo " Verifying deployment..."
+          kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }}-hello-chart --timeout=300s
+          
+          echo "Deployment status:"
+          kubectl get deployment ${{ env.HELM_RELEASE_NAME }}-hello-chart
+          
+          echo "Pods:"
+          kubectl get pods -l app.kubernetes.io/name=hello-chart
+          
+          echo "Services:"
+          kubectl get svc ${{ env.HELM_RELEASE_NAME }}-hello-chart
+
+      - name: Get Application URL
+        id: get-url
+        run: |
+          echo "Waiting for LoadBalancer to be ready..."
+          
+          for i in {1..30}; do
+            LB_URL=$(kubectl get svc ${{ env.HELM_RELEASE_NAME }}-hello-chart \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            
+            if [ -n "$LB_URL" ]; then
+              echo "Application URL: http://$LB_URL"
+              echo "url=http://$LB_URL" >> $GITHUB_OUTPUT
+              break
+            fi
+            
+            echo "Attempt $i/30: LoadBalancer not ready yet..."
+            sleep 10
+          done
+
+      - name: Health Check
+        run: |
+          echo "Running health check..."
+          
+          # Wait for LoadBalancer
+          sleep 60
+          
+          LB_URL=$(kubectl get svc ${{ env.HELM_RELEASE_NAME }}-hello-chart \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          if [ -z "$LB_URL" ]; then
+            echo " LoadBalancer URL not available yet. Skipping external health check."
+            echo "Internal health check with port-forward:"
+            kubectl port-forward svc/${{ env.HELM_RELEASE_NAME }}-hello-chart 8080:80 &
+            sleep 5
+            curl -f -s http://localhost:8080/health || true
+            kill %1 2>/dev/null || true
+          else
+            echo "Testing: http://$LB_URL/health"
+            for i in {1..10}; do
+              if curl -f -s "http://$LB_URL/health" > /dev/null; then
+                echo "Health check passed!"
+                curl -s "http://$LB_URL/health"
+                exit 0
+              fi
+              echo "Attempt $i/10: Health check failed, retrying in 15s..."
+              sleep 15
+            done
+            echo "Health check did not pass within timeout, but deployment is complete."
+          fi
+
+  # Job 3: Rollback on Failure
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: failure() && needs.build.result == 'success'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-rollback
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.16.4'
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Rollback Deployment
+        run: |
+          echo "Rolling back to previous version..."
+          
+          # Check if release exists
+          if helm status ${{ env.HELM_RELEASE_NAME }} > /dev/null 2>&1; then
+            helm rollback ${{ env.HELM_RELEASE_NAME }}
+            kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }}-hello-chart --timeout=300s
+            echo "Rollback completed successfully!"
+          else
+            echo " No previous release found. Nothing to rollback."
+          fi
+
+      - name: Verify Rollback
+        run: |
+          echo " Verifying rollback..."
+          kubectl get pods -l app.kubernetes.io/name=hello-chart
+          helm history ${{ env.HELM_RELEASE_NAME }} --max 5
